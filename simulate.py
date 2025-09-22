@@ -35,7 +35,7 @@ class simulate:
     
     @object_size.setter
     def object_size(self, object_size):
-        self._object_size = object_size*1e4
+        self._object_size = object_size
         
     @property
     def pad_factor(self):
@@ -43,8 +43,8 @@ class simulate:
         return self._pad_factor
     
     @pad_factor.setter
-    def pad_factor(self, pad_factor):
-        self._pad_factor = pad_factor*1e4
+    def pad_factor(self, pad_factor=16):
+        self._pad_factor = pad_factor
             
         
         
@@ -56,7 +56,7 @@ class simulate:
         
         self.n_pixels = (round(fmax/delta_fx)//2)*2
         
-        self.real_space_psize = self.object_size/self.n_pixels*1e3 # nm 
+        self.real_space_psize = self.object_size/self.n_pixels # m 
 
         kx = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
         ky = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
@@ -83,7 +83,32 @@ class simulate:
         self.pupil = aperture_mask* np.exp(1j*phase)
 
         self.probe = inverse_fft(self.pupil) * self.intensity
+    
+    def extract_pupil_roi(self, margin=10):
+
+        # half-width of aperture in frequency space
+        k_cutoff = self.na / self.wavelength * 2 * np.pi
+
+        # find indices that fall within cutoff
+        mask_x = np.where(np.abs(self.kX[0, :]) <= k_cutoff)[0]
+        mask_y = np.where(np.abs(self.kY[:, 0]) <= k_cutoff)[0]
+
+        x_min, x_max = mask_x.min(), mask_x.max()
+        y_min, y_max = mask_y.min(), mask_y.max()
+
+        # add margins safely
+        x_min = max(0, x_min - margin)
+        x_max = min(self.pupil.shape[1], x_max + margin + 1)
+        y_min = max(0, y_min - margin)
+        y_max = min(self.pupil.shape[0], y_max + margin + 1)
+
+        # pupil_roi = self.pupil[y_min:y_max, x_min:x_max]
+        # kX_roi = self.kX[y_min:y_max, x_min:x_max]
+        # kY_roi = self.kY[y_min:y_max, x_min:x_max]
+
+        self.pupil_roi = (y_min, y_max, x_min, x_max)
         
+        # return pupil_roi, kX_roi, kY_roi
 
     def make_object(self):
         
@@ -258,7 +283,50 @@ class simulate:
             
             simulated_data = hf.create_group("Simulated_Data")
             
-            simulated_data.create_dataset("Data_4d", data = self.dataset_4d, compression="gzip")
-            simulated_data.create_dataset("kx", data = self.kX, compression="gzip")
-            simulated_data.create_dataset("ky", data = self.kY, compression="gzip")
+            roi = self.pupil_roi
+            simulated_data.create_dataset("Data_4d", data = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
+            simulated_data.create_dataset("kx", data = self.kX[roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
+            simulated_data.create_dataset("ky", data = self.kY[roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
         
+if __name__ == "__main__":
+    
+    from time import strftime
+    time_str = strftime("%Y-%m-%d_%H.%M")
+    
+    # Define simulation parameters
+    na = 0.1
+    wavelength = .7 * 1e-10 # m
+    object_size = 1e-6  # m
+    pad_factor = 16 # Multiplier
+    step_size = 16 # Pixels
+    
+    coefficients = {'defocus': 100 * 1e-6, # m 
+                'spherical': 0,
+                'coma': 0, 
+                'astigmatism': 0}
+    
+    # Create simulator
+    sim = simulate(na=na, wavelength=wavelength, intensity=1e6)
+    sim.object_size = object_size
+    sim.pad_factor = pad_factor
+    
+    sim.make_grids()
+    
+    # Build pupil, probe and object
+    sim.make_pupil(coefficients)
+    sim.make_object()
+
+    # Extract ROI; 
+    # For efficient data saving
+    sim.extract_pupil_roi(margin=10)
+    
+    # Ptycho
+    sim.generate_scan_positions(step_size=step_size)
+    sim.simulate_dataset()
+    
+    # Save results
+    fpath = f"simulation_output_{time_str}.h5"
+    
+    sim.save_simulation(fpath)
+    
+    print(f"Simulation complete. Data saved to {fpath}")
