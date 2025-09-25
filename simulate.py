@@ -12,7 +12,7 @@ import h5py
 
 
 def forward_fft(arr):
-        
+          
     return np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(arr)))
 
 def inverse_fft(arr):
@@ -83,6 +83,12 @@ class simulate:
         self.pupil = aperture_mask* np.exp(1j*phase)
 
         self.probe = inverse_fft(self.pupil) * self.intensity
+
+        self.extract_pupil_roi(margin=0)
+        roi = self.pupil_roi
+        print(f"roi after making : {roi}")
+
+        self.gt_pupil = self.pupil[roi[0]:roi[1],roi[2]:roi[3]]
     
     def extract_pupil_roi(self, margin=10):
 
@@ -108,6 +114,8 @@ class simulate:
 
         self.pupil_roi = (y_min, y_max, x_min, x_max)
         
+        print(f"roi whle making: {self.pupil_roi}")
+
         # return pupil_roi, kX_roi, kY_roi
 
     def make_object(self):
@@ -139,7 +147,7 @@ class simulate:
     @classmethod
     def simulate_parallel_patterns(cls, complex_object, probe, scan_positions):
         
-        patterns = Parallel(n_jobs=-1)(
+        patterns = Parallel(n_jobs=-1, backend='threading')(
             delayed(cls.simulate_one_pattern)(complex_object, probe, position) for position in scan_positions
         )
         return np.array(patterns)
@@ -158,13 +166,17 @@ class simulate:
         
         self.diff_patterns = patterns
 
-        self.dataset_4d = patterns.reshape(Ny, Nx, qy, qx).transpose(1,0,2,3)
+        self.dataset_4d = patterns.reshape(Ny, Nx, qy, qx).transpose(0,1,2,3)
 
-    def plot_4d_dataset(data_4d, pupil_roi=None):
+    def plot_4d_dataset(self, pupil_roi=None):
+        
+        print(f"roi while plotting 4d: {self.pupil_roi}")
 
         if pupil_roi is not None:
-            data_4d = data_4d[:,:,pupil_roi[0]:pupil_roi[1], pupil_roi[2]:pupil_roi[3]]
-            
+            data_4d = self.dataset_4d[:,:,pupil_roi[0]:pupil_roi[1], pupil_roi[2]:pupil_roi[3]]
+        else:
+            data_4d = self.dataset_4d[:,:,self.pupil_roi[0]:self.pupil_roi[1], self.pupil_roi[2]:self.pupil_roi[3]]
+        
         # Get dataset dimensions
         coherent_shape = data_4d.shape[:2]  
         detector_shape = data_4d.shape[2:]  
@@ -181,7 +193,7 @@ class simulate:
         rectangle_size_coh = .5
         
         # Create the figure and axes **only once**
-        fig, axes = plt.subplots(1, 2, figsize=(12, 8))
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
         coherent_image = data_4d[:,:,prow_slider.value, pcol_slider.value].T
         detector_image = data_4d[lrow_slider.value, lcol_slider.value,:,:]
@@ -231,7 +243,118 @@ class simulate:
         # controls = widgets.VBox([prow_slider, pcol_slider, lrow_slider, lcol_slider])
         display(interactive_plot)
         plt.show()
+
+    def make_coherent_images(self):
+
+        roi = self.pupil_roi
+        print(f"roi while making coherent images: {roi}")
+
+        self.data_roi = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]]
+        self.kx_roi = self.kX[roi[0]:roi[1],roi[2]:roi[3]]
+        self.ky_roi = self.kY[roi[0]:roi[1],roi[2]:roi[3]]
+
+        scan_x, scan_y, det_x, det_y = self.data_roi.shape
         
+        self.images = self.data_roi.reshape(scan_x, scan_y, -1).transpose(2, 1, 0)
+        self.ks = np.column_stack([self.kx_roi.ravel(), self.ky_roi.ravel()])
+    
+        
+    def plot_pupil_array(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
+
+        image1 = np.abs(self.pupil)
+        image2 = np.angle(self.pupil)
+
+        fig, ax = plt.subplots(1,2, figsize=figsize)
+
+        im1 = ax[0].imshow(image1, vmin = vmin1, vmax = vmax1)
+        im2 = ax[1].imshow(image2, vmin = vmin2, vmax = vmax2)
+
+        ax[0].set_title('pupil amplitude')
+        ax[1].set_title('pupil phase')
+
+        plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+        plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+        plt.show()
+        
+    def plot_pupil(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
+
+        
+        
+        pupil = self.gt_pupil
+
+        image1 = np.abs(pupil)
+        image2 = np.angle(pupil)
+
+        fig, ax = plt.subplots(1,2, figsize=figsize)
+
+        im1 = ax[0].imshow(image1, vmin = vmin1, vmax = vmax1)
+        im2 = ax[1].imshow(image2, vmin = vmin2, vmax = vmax2)
+
+        ax[0].set_title('pupil amplitude')
+        ax[1].set_title('pupil phase')
+
+        plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+        plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_object(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
+        image1 = np.abs(self.complex_object)
+        image2 = np.angle(self.complex_object)
+
+        fig, ax = plt.subplots(1,2, figsize=figsize)
+
+        im1 = ax[0].imshow(image1, vmin = vmin1, vmax = vmax1)
+        im2 = ax[1].imshow(image2, vmin = vmin2, vmax = vmax2)
+
+        ax[0].set_title('Object amplitude')
+        ax[1].set_title('Object phase')
+
+        plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+        plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+        plt.show()
+    def plot_object_ft(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
+        object_ft = forward_fft(self.complex_object)
+        image1 = np.abs(object_ft)
+        image2 = np.angle(object_ft)
+
+        fig, ax = plt.subplots(1,2, figsize=figsize)
+
+        im1 = ax[0].imshow(image1, vmin = vmin1, vmax = vmax1)
+        im2 = ax[1].imshow(image2, vmin = vmin2, vmax = vmax2)
+
+        ax[0].set_title('object FT amplitude')
+        ax[1].set_title('object FT phase')
+
+        plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+        plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+        plt.show()
+    def plot_probe(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
+        image1 = np.abs(self.probe)
+        image2 = np.angle(self.probe)
+
+        fig, ax = plt.subplots(1,2, figsize=figsize)
+
+        im1 = ax[0].imshow(image1, vmin = vmin1, vmax = vmax1)
+        im2 = ax[1].imshow(image2, vmin = vmin2, vmax = vmax2)
+
+        ax[0].set_title('Probe amplitude')
+        ax[1].set_title('Probe phase')
+
+        plt.colorbar(im1, ax=ax[0], fraction=0.046, pad=0.04)
+        plt.colorbar(im2, ax=ax[1], fraction=0.046, pad=0.04)
+
+        plt.tight_layout()
+        plt.show()
+
+    
     def save_simulation(self, file_path):
         
         
@@ -282,11 +405,15 @@ class simulate:
             
             
             simulated_data = hf.create_group("Simulated_Data")
+
+            simulated_data.create_dataset("Data_4d", data = self.data_roi, compression="gzip")
+            simulated_data.create_dataset("kx", data = self.kx_roi, compression="gzip")
+            simulated_data.create_dataset("ky", data = self.ky_roi, compression="gzip")
+
+            simulated_data.create_dataset("coherent_images", data = self.images, compression='gzip')
+
+            simulated_data.create_dataset("ks", data = self.ks, compression='gzip')
             
-            roi = self.pupil_roi
-            simulated_data.create_dataset("Data_4d", data = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
-            simulated_data.create_dataset("kx", data = self.kX[roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
-            simulated_data.create_dataset("ky", data = self.kY[roi[0]:roi[1],roi[2]:roi[3]], compression="gzip")
         
 if __name__ == "__main__":
     
@@ -318,7 +445,7 @@ if __name__ == "__main__":
 
     # Extract ROI; 
     # For efficient data saving
-    sim.extract_pupil_roi(margin=10)
+    sim.extract_pupil_roi(margin=20)
     
     # Ptycho
     sim.generate_scan_positions(step_size=step_size)

@@ -13,7 +13,7 @@ def create_shape(size):
 
     object_support = np.where(shape_mask>.1, 1.0,0)
     
-    rr, cc = disk(center, size//10, shape=shape_mask.shape)
+    rr, cc = disk(np.array(center)-np.array([0,int(0.1*size)]), size//8, shape=shape_mask.shape)
     shape_mask[rr, cc] = 0.5
     
     return 1-shape_mask, object_support
