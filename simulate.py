@@ -9,6 +9,7 @@ from IPython.display import display
 from pupil import combined_aberrations
 from objects import generate_phase_profile, create_shape
 import h5py
+import ipywidgets as widgets
 
 
 def forward_fft(arr):
@@ -20,7 +21,7 @@ def inverse_fft(arr):
     
     
     
-class simulate:
+class Sim:
     
     def __init__(self, na, wavelength, intensity = 1e6):
         
@@ -86,9 +87,12 @@ class simulate:
 
         self.extract_pupil_roi(margin=0)
         roi = self.pupil_roi
-        print(f"roi after making : {roi}")
 
         self.gt_pupil = self.pupil[roi[0]:roi[1],roi[2]:roi[3]]
+
+        del phase
+        del aperture_mask
+
     
     def extract_pupil_roi(self, margin=10):
 
@@ -113,9 +117,10 @@ class simulate:
         # kY_roi = self.kY[y_min:y_max, x_min:x_max]
 
         self.pupil_roi = (y_min, y_max, x_min, x_max)
+    
+        del mask_x
+        del mask_y
         
-        print(f"roi whle making: {self.pupil_roi}")
-
         # return pupil_roi, kX_roi, kY_roi
 
     def make_object(self):
@@ -123,6 +128,7 @@ class simulate:
         object_amp, object_support = create_shape(self.X.shape[0])
         object_pha = generate_phase_profile(self.X.shape[0], phase_type= 'sinusoidal') * object_support
         self.complex_object = object_amp*np.exp(1j*object_pha)
+        del object_amp, object_pha
         
     def generate_scan_positions(self, step_size):
         
@@ -136,38 +142,56 @@ class simulate:
     
         centre = np.array(complex_object.shape)//2
         shift = centre - np.array(scan_position)
-        shfited_object = scipy.ndimage.shift(complex_object, shift[::-1], mode='constant', cval = 1.0)  
+        shfited_object = scipy.ndimage.shift(complex_object, shift, mode='constant', cval = 1.0)  
         exit_wave = shfited_object*probe
-
-        fft_exit_wave = forward_fft(exit_wave)
-        diff_pattern = np.abs(fft_exit_wave)**2
         
-        return diff_pattern
+        intensity_pattern = np.abs(forward_fft(exit_wave))**2
+        
+        return intensity_pattern
 
     @classmethod
-    def simulate_parallel_patterns(cls, complex_object, probe, scan_positions):
+    def simulate_parallel_patterns(cls, complex_object, probe, scan_positions, n_jobs = -1):
         
-        patterns = Parallel(n_jobs=-1, backend='threading')(
+        intensity_patterns = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(cls.simulate_one_pattern)(complex_object, probe, position) for position in scan_positions
         )
-        return np.array(patterns)
+
+        intensity_patterns = np.array(intensity_patterns)
+        
+        return intensity_patterns
     
-    def simulate_dataset(self):
+    def simulate_dataset(self, n_jobs = -1):
         """
         Returns a 4D dataset: (Ny, Nx, qy, qx).
         """
         # simulate exit waves
-        patterns = self.simulate_parallel_patterns(self.complex_object, self.probe, self.scan_positions)
+        self.diff_patterns = self.simulate_parallel_patterns(self.complex_object, self.probe, self.scan_positions, n_jobs=n_jobs)
         
         # reshape into 4D (Ny_scan, Nx_scan, qy, qx)
-        Nx = len(np.unique([p[0] for p in self.scan_positions]))
-        Ny = len(np.unique([p[1] for p in self.scan_positions]))
-        qy, qx = patterns[0].shape
+        Nrow = len(np.unique([p[0] for p in self.scan_positions]))
+        Ncol = len(np.unique([p[1] for p in self.scan_positions]))
+        qrow, qcol = self.diff_patterns[0].shape
         
-        self.diff_patterns = patterns
+        print("Making 4D dataset ...")
+        self.dataset_4d = self.diff_patterns.reshape(Nrow, Ncol, qrow, qcol).transpose(1,0,2,3)
 
-        self.dataset_4d = patterns.reshape(Ny, Nx, qy, qx).transpose(0,1,2,3)
+    def make_coherent_images(self):
 
+        roi = self.pupil_roi
+        print(f"roi while making coherent images: {roi}")
+
+        self.data_roi = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]]
+        self.kx_roi = self.kX[roi[0]:roi[1],roi[2]:roi[3]]
+        self.ky_roi = self.kY[roi[0]:roi[1],roi[2]:roi[3]]
+
+        scan_x, scan_y, det_x, det_y = self.data_roi.shape
+        
+        self.images = self.data_roi.reshape(scan_x, scan_y, -1).transpose(2, 0, 1)
+        
+        self.ks = np.column_stack([self.kx_roi.ravel(), self.ky_roi.ravel()])
+
+    
+    # ____________________________ Plotting ________________________________
     def plot_4d_dataset(self, pupil_roi=None):
         
         print(f"roi while plotting 4d: {self.pupil_roi}")
@@ -195,7 +219,7 @@ class simulate:
         # Create the figure and axes **only once**
         fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
-        coherent_image = data_4d[:,:,prow_slider.value, pcol_slider.value].T
+        coherent_image = data_4d[:,:,prow_slider.value, pcol_slider.value]
         detector_image = data_4d[lrow_slider.value, lcol_slider.value,:,:]
 
         
@@ -221,7 +245,7 @@ class simulate:
         
         def update_plot(prow, pcol, lrow, lcol):
             """ Updates the plot based on slider values. """
-            coherent_image = data_4d[:,:,prow,pcol].T
+            coherent_image = data_4d[:,:,prow,pcol]
             detector_image = data_4d[lrow,lcol,:,:]
 
             im0.set_data(coherent_image)
@@ -244,19 +268,6 @@ class simulate:
         display(interactive_plot)
         plt.show()
 
-    def make_coherent_images(self):
-
-        roi = self.pupil_roi
-        print(f"roi while making coherent images: {roi}")
-
-        self.data_roi = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]]
-        self.kx_roi = self.kX[roi[0]:roi[1],roi[2]:roi[3]]
-        self.ky_roi = self.kY[roi[0]:roi[1],roi[2]:roi[3]]
-
-        scan_x, scan_y, det_x, det_y = self.data_roi.shape
-        
-        self.images = self.data_roi.reshape(scan_x, scan_y, -1).transpose(2, 1, 0)
-        self.ks = np.column_stack([self.kx_roi.ravel(), self.ky_roi.ravel()])
     
         
     def plot_pupil_array(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
@@ -336,6 +347,7 @@ class simulate:
 
         plt.tight_layout()
         plt.show()
+        
     def plot_probe(self, vmin1 = None, vmax1=None, vmin2 = None, vmax2=None, figsize = (10,5)):
         image1 = np.abs(self.probe)
         image2 = np.angle(self.probe)
@@ -354,6 +366,7 @@ class simulate:
         plt.tight_layout()
         plt.show()
 
+    
     
     def save_simulation(self, file_path):
         
@@ -411,10 +424,72 @@ class simulate:
             simulated_data.create_dataset("ky", data = self.ky_roi, compression="gzip")
 
             simulated_data.create_dataset("coherent_images", data = self.images, compression='gzip')
+            simulated_data.create_dataset("diffraction_patterns", data = self.diff_patterns, compression='gzip')
 
             simulated_data.create_dataset("ks", data = self.ks, compression='gzip')
-            
+
+class Sim_complex(Sim):
+    
+    @staticmethod
+    def simulate_one_pattern(complex_object, probe, scan_position):
+    
+        centre = np.array(complex_object.shape)//2
+        shift = centre - np.array(scan_position)
+        shfited_object = scipy.ndimage.shift(complex_object, shift[::-1], mode='constant', cval = 1.0)  
+        exit_wave = shfited_object*probe
         
+        complex_pattern = forward_fft(exit_wave)
+        
+        return complex_pattern
+        
+    def plot_complex_images(self, vmin1 = None, vmax1 = None, vmin2=-np.pi, vmax2=np.pi, cmap1 = 'viridis', cmap2 = 'viridis'):
+        """Displays a list of coherent images and allows scrolling through them via a slider."""
+        
+    
+        num_images = self.images.shape[0]  # Number of images in the list
+        
+        # Create a slider for selecting the image index
+        img_slider = widgets.IntSlider(min=0, max= num_images - 1, value=0, description="Image")
+    
+        # Create figure & axis once
+        fig, axes = plt.subplots(1,2, figsize=(10, 5))
+        
+        # Initial image
+        im1 = axes[0].imshow(np.abs(self.images[0]), vmin = vmin1, vmax = vmax1, cmap=cmap1)    
+        axes[0].set_title(f"Image 1 {0}/{num_images - 1}")
+        #axes[0].axis('off')  # Hide axes
+        plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+        
+        # Plot the second image
+        im2 = axes[1].imshow(np.angle(self.images[0]), vmin = vmin2, vmax = vmax2, cmap=cmap2)
+        axes[1].set_title(f"Image 1 {0}/{num_images - 1}")
+        #axes[1].axis('off')  # Hide axes
+        plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+        
+        plt.tight_layout()
+        
+        def update_image(img_idx):
+            """Updates the displayed image when the slider is moved."""
+            img1 = np.abs(self.images[img_idx])
+    
+            img2 = np.angle(self.images[img_idx])
+            
+            im1.set_data(img1)  # Update image data
+            im1.set_clim(vmin1, vmax1)
+    
+            im2.set_data(img2)  # Update image data
+            im2.set_clim(vmin2, vmax2)
+            
+            axes[0].set_title(f"Image 1 {img_idx}/{num_images - 1}")  # Update title
+            axes[1].set_title(f"Image 2 {img_idx}/{num_images - 1}")  # Update title
+            fig.canvas.draw_idle()  # Efficient redraw
+    
+        # Create interactive slider
+        interactive_plot = widgets.interactive(update_image, img_idx=img_slider)
+    
+        display(interactive_plot)  # Show slider
+        #display(fig)  # Display the figure
+
 if __name__ == "__main__":
     
     from time import strftime

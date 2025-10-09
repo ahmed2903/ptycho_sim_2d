@@ -18,7 +18,7 @@ def create_shape(size):
     
     return 1-shape_mask, object_support
 
-def generate_phase_profile(size, phase_type="gradient", phase_max=np.pi, period = 4):
+def generate_phase_profile(size, phase_type="gradient", phase_max=np.pi/10, period = 4):
     """Generates a phase profile of the given size."""
     x, y = np.meshgrid(np.linspace(-1, 1, size), np.linspace(-1, 1, size))
     
