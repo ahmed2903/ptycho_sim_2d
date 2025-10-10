@@ -59,14 +59,14 @@ class Sim:
         
         self.real_space_psize = self.object_size/self.n_pixels # m 
 
-        kx = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
-        ky = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
+        krow = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
+        kcol = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
         
-        self.kX,self.kY = np.meshgrid(kx, ky)
+        self.kRow, self.kCol = np.meshgrid(krow, kcol, indexing='ij')
         
-        x = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
-        y = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
-        self.X, self.Y = np.meshgrid(x,y)
+        row = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
+        col = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
+        self.Row, self.Col = np.meshgrid(row,col, indexing='ij')
         
 
     def make_pupil(self, coefficients):
@@ -75,9 +75,9 @@ class Sim:
         
         pupil_aperture_width = self.na/self.wavelength*2*np.pi
         
-        aperture_mask = ( abs(self.kX)<= pupil_aperture_width ) * ( abs(self.kY)<= pupil_aperture_width ) 
+        aperture_mask = ( abs(self.kRow)<= pupil_aperture_width ) * ( abs(self.kCol)<= pupil_aperture_width ) 
         
-        phase = combined_aberrations(self.kX, self.kY, coefficients, self.wavelength)
+        phase = combined_aberrations(self.kRow, self.kCol, coefficients, self.wavelength)
         
         phase *= aperture_mask
         
@@ -100,33 +100,33 @@ class Sim:
         k_cutoff = self.na / self.wavelength * 2 * np.pi
 
         # find indices that fall within cutoff
-        mask_x = np.where(np.abs(self.kX[0, :]) <= k_cutoff)[0]
-        mask_y = np.where(np.abs(self.kY[:, 0]) <= k_cutoff)[0]
+        mask_row = np.where(np.abs(self.kRow[0, :]) <= k_cutoff)[0]
+        mask_col = np.where(np.abs(self.kCol[:, 0]) <= k_cutoff)[0]
 
-        x_min, x_max = mask_x.min(), mask_x.max()
-        y_min, y_max = mask_y.min(), mask_y.max()
+        row_min, row_max = mask_row.min(), mask_row.max()
+        col_min, col_max = mask_col.min(), mask_col.max()
 
         # add margins safely
-        x_min = max(0, x_min - margin)
-        x_max = min(self.pupil.shape[1], x_max + margin + 1)
-        y_min = max(0, y_min - margin)
-        y_max = min(self.pupil.shape[0], y_max + margin + 1)
+        row_min = max(0, row_min - margin)
+        row_max = min(self.pupil.shape[1], row_max + margin + 1)
+        col_min = max(0, col_min - margin)
+        col_max = min(self.pupil.shape[0], col_max + margin + 1)
 
         # pupil_roi = self.pupil[y_min:y_max, x_min:x_max]
         # kX_roi = self.kX[y_min:y_max, x_min:x_max]
         # kY_roi = self.kY[y_min:y_max, x_min:x_max]
 
-        self.pupil_roi = (y_min, y_max, x_min, x_max)
+        self.pupil_roi = (row_min, row_max, col_min, col_max)
     
-        del mask_x
-        del mask_y
+        del mask_row
+        del mask_col
         
         # return pupil_roi, kX_roi, kY_roi
 
     def make_object(self):
         
-        object_amp, object_support = create_shape(self.X.shape[0])
-        object_pha = generate_phase_profile(self.X.shape[0], phase_type= 'sinusoidal') * object_support
+        object_amp, object_support = create_shape(self.Row.shape[0])
+        object_pha = generate_phase_profile(self.Row.shape[0], phase_type= 'sinusoidal') * object_support
         self.complex_object = object_amp*np.exp(1j*object_pha)
         del object_amp, object_pha
         
@@ -135,7 +135,7 @@ class Sim:
         """Generates a scan grid over the object."""
         self.step_size = step_size
         
-        self.scan_positions = [(x, y) for x in range(0, self.n_pixels , step_size) for y in range(0, self.n_pixels , step_size)]
+        self.scan_positions = [(row, col) for row in range(0, self.n_pixels , step_size) for col in range(0, self.n_pixels , step_size)]
         
     @staticmethod
     def simulate_one_pattern(complex_object, probe, scan_position):
@@ -162,7 +162,7 @@ class Sim:
     
     def simulate_dataset(self, n_jobs = -1):
         """
-        Returns a 4D dataset: (Ny, Nx, qy, qx).
+        Returns a 4D dataset: (Nrow, Ncol, qrow, qcol).
         """
         # simulate exit waves
         self.diff_patterns = self.simulate_parallel_patterns(self.complex_object, self.probe, self.scan_positions, n_jobs=n_jobs)
@@ -173,7 +173,7 @@ class Sim:
         qrow, qcol = self.diff_patterns[0].shape
         
         print("Making 4D dataset ...")
-        self.dataset_4d = self.diff_patterns.reshape(Nrow, Ncol, qrow, qcol).transpose(1,0,2,3)
+        self.dataset_4d = self.diff_patterns.reshape(Nrow, Ncol, qrow, qcol).transpose(0,1,2,3)
 
     def make_coherent_images(self):
 
@@ -181,14 +181,14 @@ class Sim:
         print(f"roi while making coherent images: {roi}")
 
         self.data_roi = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]]
-        self.kx_roi = self.kX[roi[0]:roi[1],roi[2]:roi[3]]
-        self.ky_roi = self.kY[roi[0]:roi[1],roi[2]:roi[3]]
+        self.krow_roi = self.kRow[roi[0]:roi[1],roi[2]:roi[3]]
+        self.kcol_roi = self.kCol[roi[0]:roi[1],roi[2]:roi[3]]
 
-        scan_x, scan_y, det_x, det_y = self.data_roi.shape
+        scan_row, scan_col, det_row, det_col = self.data_roi.shape
         
-        self.images = self.data_roi.reshape(scan_x, scan_y, -1).transpose(2, 0, 1)
+        self.images = self.data_roi.reshape(scan_row, scan_col, -1).transpose(2, 0, 1)
         
-        self.ks = np.column_stack([self.kx_roi.ravel(), self.ky_roi.ravel()])
+        self.ks = np.column_stack([self.krow_roi.ravel(), self.kcol_roi.ravel()])
 
     
     # ____________________________ Plotting ________________________________
@@ -420,8 +420,8 @@ class Sim:
             simulated_data = hf.create_group("Simulated_Data")
 
             simulated_data.create_dataset("Data_4d", data = self.data_roi, compression="gzip")
-            simulated_data.create_dataset("kx", data = self.kx_roi, compression="gzip")
-            simulated_data.create_dataset("ky", data = self.ky_roi, compression="gzip")
+            simulated_data.create_dataset("kx", data = self.krow_roi, compression="gzip")
+            simulated_data.create_dataset("ky", data = self.kcol_roi, compression="gzip")
 
             simulated_data.create_dataset("coherent_images", data = self.images, compression='gzip')
             simulated_data.create_dataset("diffraction_patterns", data = self.diff_patterns, compression='gzip')
