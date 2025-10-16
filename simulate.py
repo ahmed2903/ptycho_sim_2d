@@ -6,8 +6,8 @@ import scipy
 from matplotlib.patches import Rectangle
 import ipywidgets as widgets
 from IPython.display import display
-from pupil import combined_aberrations
-from objects import generate_phase_profile, create_shape
+from .pupil import combined_aberrations
+from .objects import generate_phase_profile, create_shape
 import h5py
 import ipywidgets as widgets
 
@@ -62,11 +62,11 @@ class Sim:
         krow = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
         kcol = np.linspace(-self.pad_factor*self.na/self.wavelength* 2 * np.pi, self.pad_factor*self.na/self.wavelength*2 * np.pi, self.n_pixels)
         
-        self.kRow, self.kCol = np.meshgrid(krow, kcol, indexing='ij')
+        self.kRow, self.kCol = np.meshgrid(krow, kcol, indexing = 'ij')
         
         row = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
         col = np.linspace(-self.object_size//2, self.object_size//2, self.n_pixels)
-        self.Row, self.Col = np.meshgrid(row,col, indexing='ij')
+        self.Row, self.Col = np.meshgrid(row,col, indexing = 'ij')
         
 
     def make_pupil(self, coefficients):
@@ -100,8 +100,8 @@ class Sim:
         k_cutoff = self.na / self.wavelength * 2 * np.pi
 
         # find indices that fall within cutoff
-        mask_row = np.where(np.abs(self.kRow[0, :]) <= k_cutoff)[0]
-        mask_col = np.where(np.abs(self.kCol[:, 0]) <= k_cutoff)[0]
+        mask_row = np.where(np.abs(self.kRow[:, 0]) <= k_cutoff)[0]
+        mask_col = np.where(np.abs(self.kCol[0, :]) <= k_cutoff)[0]
 
         row_min, row_max = mask_row.min(), mask_row.max()
         col_min, col_max = mask_col.min(), mask_col.max()
@@ -151,13 +151,14 @@ class Sim:
 
     @classmethod
     def simulate_parallel_patterns(cls, complex_object, probe, scan_positions, n_jobs = -1):
-        
+        print("Simulating diffraction patterns ...")
+
         intensity_patterns = Parallel(n_jobs=n_jobs, backend='threading')(
             delayed(cls.simulate_one_pattern)(complex_object, probe, position) for position in scan_positions
         )
 
         intensity_patterns = np.array(intensity_patterns)
-        
+        print("Done.")
         return intensity_patterns
     
     def simulate_dataset(self, n_jobs = -1):
@@ -173,12 +174,12 @@ class Sim:
         qrow, qcol = self.diff_patterns[0].shape
         
         print("Making 4D dataset ...")
-        self.dataset_4d = self.diff_patterns.reshape(Nrow, Ncol, qrow, qcol).transpose(0,1,2,3)
-
+        self.dataset_4d = np.flip(self.diff_patterns.reshape(Nrow, Ncol, qrow, qcol).transpose(0,1,2,3), axis=(0,1))
+        print("Done.")
     def make_coherent_images(self):
 
         roi = self.pupil_roi
-        print(f"roi while making coherent images: {roi}")
+        print(f"Making coherent imges ...")
 
         self.data_roi = self.dataset_4d[:,:,roi[0]:roi[1],roi[2]:roi[3]]
         self.krow_roi = self.kRow[roi[0]:roi[1],roi[2]:roi[3]]
@@ -190,7 +191,8 @@ class Sim:
         
         self.ks = np.column_stack([self.krow_roi.ravel(), self.kcol_roi.ravel()])
 
-    
+        print(f"Done.")
+
     # ____________________________ Plotting ________________________________
     def plot_4d_dataset(self, pupil_roi=None):
         
@@ -369,7 +371,8 @@ class Sim:
     
     
     def save_simulation(self, file_path):
-        
+
+        print("Saving simulation ...")
         
         meta_data = {
             "numerical_aperture": self.na,
@@ -399,14 +402,12 @@ class Sim:
             # Save object images 
             amp = np.abs(self.complex_object)
             pha = np.angle(self.complex_object)
-            
-            
             ground_truth.create_dataset("Object_amplitude", data=amp, compression="gzip")
             ground_truth.create_dataset("Object_phase", data=pha, compression="gzip")
             
             # Save Pupil 
-            amp = np.abs(self.pupil)
-            pha = np.angle(self.pupil)
+            amp = np.abs(self.gt_pupil)
+            pha = np.angle(self.gt_pupil)
             ground_truth.create_dataset("Pupil_amplitude", data=amp, compression="gzip")
             ground_truth.create_dataset("Pupil_phase", data=pha, compression="gzip")
             
@@ -420,14 +421,61 @@ class Sim:
             simulated_data = hf.create_group("Simulated_Data")
 
             simulated_data.create_dataset("Data_4d", data = self.data_roi, compression="gzip")
-            simulated_data.create_dataset("kx", data = self.krow_roi, compression="gzip")
-            simulated_data.create_dataset("ky", data = self.kcol_roi, compression="gzip")
 
             simulated_data.create_dataset("coherent_images", data = self.images, compression='gzip')
-            simulated_data.create_dataset("diffraction_patterns", data = self.diff_patterns, compression='gzip')
-
+            #simulated_data.create_dataset("diffraction_patterns", data = self.diff_patterns, compression='gzip')
+            
             simulated_data.create_dataset("ks", data = self.ks, compression='gzip')
 
+        print(f"Simulation saved to {file_path}")
+
+    @classmethod
+    def load_simulation(cls, file_path):
+        instance = cls.__new__(cls)
+        with h5py.File(file_path, 'r') as hf:
+            # Load simulation parameters
+            simulation_params = hf["Simulation_Params"]
+            instance.na = simulation_params.attrs["numerical_aperture"]
+            instance.wavelength = simulation_params.attrs["wavelength"]
+            instance.intensity = simulation_params.attrs["beam_intensity"]
+            instance.object_size = simulation_params.attrs["object_size"]
+            instance.pad_factor = simulation_params.attrs["padding_factor"]
+            instance.step_size = simulation_params.attrs["step_size"]
+            instance.real_space_psize = simulation_params.attrs["real_space_pixel_size_nm"]
+            
+            # Load aberration coefficients
+            aberration_coefficients = hf["Aberration_Coefficients"]
+            instance.aberration_coefficients = dict(aberration_coefficients.attrs)
+            
+            # Load ground truth data
+            ground_truth = hf["Ground_Truth"]
+            
+            # Reconstruct complex object
+            obj_amp = ground_truth["Object_amplitude"][:]
+            obj_pha = ground_truth["Object_phase"][:]
+            instance.complex_object = obj_amp * np.exp(1j * obj_pha)
+            
+            # Reconstruct pupil
+            pupil_amp = ground_truth["Pupil_amplitude"][:]
+            pupil_pha = ground_truth["Pupil_phase"][:]
+            instance.gt_pupil = pupil_amp * np.exp(1j * pupil_pha)
+            
+            # Reconstruct probe
+            probe_amp = ground_truth["Probe_amplitude"][:]
+            probe_pha = ground_truth["Probe_phase"][:]
+            cls.probe = probe_amp * np.exp(1j * probe_pha)
+            
+            # Load simulated data
+            simulated_data = hf["Simulated_Data"]
+            instance.data_roi = simulated_data["Data_4d"][:]
+            #instance.krow_roi = simulated_data["kx"][:]
+            #instance.kcol_roi = simulated_data["ky"][:]
+            instance.images = simulated_data["coherent_images"][:]
+            #instance.diff_patterns = simulated_data["diffraction_patterns"][:]
+            instance.ks = simulated_data["ks"][:]
+        
+        return instance
+        
 class Sim_complex(Sim):
     
     @staticmethod
@@ -435,7 +483,7 @@ class Sim_complex(Sim):
     
         centre = np.array(complex_object.shape)//2
         shift = centre - np.array(scan_position)
-        shfited_object = scipy.ndimage.shift(complex_object, shift[::-1], mode='constant', cval = 1.0)  
+        shfited_object = scipy.ndimage.shift(complex_object, shift, mode='constant', cval = 1.0)  #, shift[::-1]
         exit_wave = shfited_object*probe
         
         complex_pattern = forward_fft(exit_wave)
@@ -489,7 +537,81 @@ class Sim_complex(Sim):
     
         display(interactive_plot)  # Show slider
         #display(fig)  # Display the figure
+    def plot_4d_dataset(self, pupil_roi=None):
+        
+        print(f"roi while plotting 4d: {self.pupil_roi}")
 
+        if pupil_roi is not None:
+            data_4d = np.abs(self.dataset_4d[:,:,pupil_roi[0]:pupil_roi[1], pupil_roi[2]:pupil_roi[3]])**2
+        else:
+            data_4d = np.abs(self.dataset_4d[:,:,self.pupil_roi[0]:self.pupil_roi[1], self.pupil_roi[2]:self.pupil_roi[3]])**2
+        
+        # Get dataset dimensions
+        coherent_shape = data_4d.shape[:2]  
+        detector_shape = data_4d.shape[2:]  
+            
+        # Set slider limits
+        pcol_slider = widgets.IntSlider(min=0, max= detector_shape[1] - 1, value=detector_shape[1]//2, description="px")
+        prow_slider = widgets.IntSlider(min=0, max= detector_shape[0] - 1, value=detector_shape[0]//2, description="py")
+        
+        lcol_slider = widgets.IntSlider(min=0, max= coherent_shape[1] - 1, value=coherent_shape[1]//2, description="lx")
+        lrow_slider = widgets.IntSlider(min=0, max= coherent_shape[0] - 1, value=coherent_shape[0]//2, description="ly")
+
+
+        rectangle_size_det = 4 
+        rectangle_size_coh = .5
+        
+        # Create the figure and axes **only once**
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+        coherent_image = data_4d[:,:,prow_slider.value, pcol_slider.value]
+        detector_image = data_4d[lrow_slider.value, lcol_slider.value,:,:]
+
+        
+        im0 = axes[0].imshow(coherent_image, cmap='plasma')
+        
+        axes[0].set_title(f"Coherent Image (lx={lrow_slider.value}, ly={lcol_slider.value})")
+        rect_coherent = Rectangle(( lcol_slider.value - rectangle_size_coh / 2, lrow_slider.value - rectangle_size_coh / 2), 
+                                rectangle_size_coh, rectangle_size_coh, 
+                                edgecolor='white', facecolor='white', lw=2)
+        
+        axes[0].add_patch(rect_coherent)
+        plt.colorbar(im0, ax=axes[0], label="Intensity")
+
+        im1 = axes[1].imshow(detector_image, cmap='viridis')
+        axes[1].set_title(f"Detector Image (px={pcol_slider.value}, py={prow_slider.value})")
+        rect_detector = Rectangle((pcol_slider.value - rectangle_size_det / 2, prow_slider.value - rectangle_size_det / 2), 
+                                rectangle_size_det, rectangle_size_det, 
+                                edgecolor='white', facecolor='white', lw=2)
+        axes[1].add_patch(rect_detector)
+        plt.colorbar(im1, ax=axes[1], label="Detector Intensity")
+
+        plt.tight_layout()
+        
+        def update_plot(prow, pcol, lrow, lcol):
+            """ Updates the plot based on slider values. """
+            coherent_image = data_4d[:,:,prow,pcol]
+            detector_image = data_4d[lrow,lcol,:,:]
+
+            im0.set_data(coherent_image)
+            im1.set_data(detector_image)
+
+            axes[0].set_title(f"Coherent Image from Pixel ({pcol}, {prow})")
+            axes[1].set_title(f'Detector Image at Location ({lcol},{lrow})')
+            
+            # Update rectangles
+            rect_coherent.set_xy((lcol - rectangle_size_coh / 2, lrow - rectangle_size_coh / 2))
+            rect_detector.set_xy((pcol - rectangle_size_det / 2, prow - rectangle_size_det / 2))
+
+
+            fig.canvas.draw_idle()
+            
+        # Create interactive widget
+        interactive_plot = widgets.interactive(update_plot, prow=prow_slider, pcol=pcol_slider, lrow=lrow_slider, lcol=lcol_slider)
+        
+        # controls = widgets.VBox([prow_slider, pcol_slider, lrow_slider, lcol_slider])
+        display(interactive_plot)
+        plt.show()
 if __name__ == "__main__":
     
     from time import strftime

@@ -8,7 +8,9 @@ def create_shape(size):
     
     r = np.array([size * 0.2, size * 0.8, size * 0.8])
     c = np.array([size * 0.5, size * 0.2, size * 0.8])
+    
     rr, cc = polygon(r, c)
+    
     shape_mask[rr, cc] = .2
 
     object_support = np.where(shape_mask>.1, 1.0,0)
