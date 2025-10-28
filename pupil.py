@@ -15,7 +15,7 @@ def spherical_aberration(kx, ky, spherical_coeff):
 
 def coma_aberration(kx, ky, coma_coeff):
 
-    return coma_coeff * kx * (kx**2 + ky**2)
+    return coma_coeff * ky * (kx**2 + ky**2)
 
 def astigmatism_aberration(kx, ky, astigmatism_coeff):
 
